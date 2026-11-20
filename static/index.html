@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AirWatch AI</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+:root{--bg:#f6f7f9;--card:#fff;--ink:#1c2430;--mute:#6b7685;--line:#e3e7ec;--fault:#c0392b;--event:#d68910;--pipe:#6c7a89;--ok:#2e8b57}
+*{box-sizing:border-box}body{margin:0;font:14px/1.45 system-ui,sans-serif;background:var(--bg);color:var(--ink)}
+header{padding:14px 20px;background:#14202e;color:#fff;display:flex;gap:16px;align-items:baseline;flex-wrap:wrap}
+header h1{margin:0;font-size:18px}header small{color:#9fb0c3}
+main{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:14px;padding:14px;max-width:1300px;margin:auto}
+.card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:14px}
+.card h2{margin:0 0 10px;font-size:13px;text-transform:uppercase;letter-spacing:.04em;color:var(--mute)}
+.tiles{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;grid-column:1/-1}
+.tile{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:12px}
+.tile b{display:block;font-size:26px}.tile span{color:var(--mute);font-size:12px}
+#map{height:380px;border-radius:6px}.wide{grid-column:1/-1}
+.inc{border-left:4px solid var(--pipe);padding:6px 10px;margin:0 0 8px;background:#fafbfc;cursor:pointer}
+.inc.sensor_fault{border-color:var(--fault)}.inc.genuine_event{border-color:var(--event)}
+.inc b{font-size:13px}.inc small{color:var(--mute);display:block}.inc ul{margin:4px 0;padding-left:18px}
+table{border-collapse:collapse;width:100%}td,th{padding:4px 6px;border-bottom:1px solid var(--line);text-align:left}
+form{display:flex;gap:8px}input{flex:1;padding:8px;border:1px solid var(--line);border-radius:6px}
+button{padding:8px 14px;border:0;border-radius:6px;background:#14202e;color:#fff;cursor:pointer}
+#ans{margin-top:10px;white-space:pre-wrap}canvas{width:100%;height:150px}
+@media(max-width:600px){.tiles{grid-template-columns:repeat(2,1fr)}}
+</style></head><body>
+<header><h1>AirWatch AI</h1><small>Pollution event or sensor failure? Simulated 50-station network.</small></header>
+<main>
+<div class="tiles" id="tiles"></div>
+<div class="card"><h2>Network map</h2><div id="map"></div><small style="color:var(--mute)">Red: sensor fault · amber: real event · grey: data pipeline · green: ok</small></div>
+<div class="card"><h2>Incidents</h2><div id="inc"></div></div>
+<div class="card"><h2 id="stt">Station series (click an incident)</h2><canvas id="cv" width="600" height="150"></canvas></div>
+<div class="card"><h2>Early warnings</h2><div id="fc"></div></div>
+<div class="card wide"><h2>Ask the operations assistant</h2>
+<form id="f"><input id="q" placeholder="Why did AQI suddenly increase?" maxlength="300"><button>Ask</button></form><div id="ans"></div></div>
+</main>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const $=id=>document.getElementById(id),j=u=>fetch(u).then(r=>r.json());
+const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const col={sensor_fault:'#c0392b',genuine_event:'#d68910',data_pipeline:'#6c7a89'};
+const map=L.map('map').setView([28.6,77.2],10);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap'}).addTo(map);
+function plot(s){const c=$('cv'),g=c.getContext('2d');g.clearRect(0,0,c.width,c.height);
+ const all=[...s.pm25,...s.neighbour_median_pm25].filter(v=>v!=null),mx=Math.max(...all,50),n=s.pm25.length;
+ const line=(a,st,w)=>{g.beginPath();g.strokeStyle=st;g.lineWidth=w;let pen=false;a.forEach((v,i)=>{if(v==null){pen=false;return}
+  const x=i/(n-1)*(c.width-10)+5,y=c.height-8-v/mx*(c.height-16);pen?g.lineTo(x,y):g.moveTo(x,y);pen=true});g.stroke()};
+ line(s.neighbour_median_pm25,'#9fb0c3',2);line(s.pm25,'#c0392b',2);
+ g.fillStyle='#6b7685';g.fillText('PM2.5 max '+mx.toFixed(0)+'  (red: station, grey: neighbour median)',6,12)}
+async function show(id){$('stt').textContent='Station '+id+' - last 48h';plot(await j('/api/stations/'+id+'/series?hours=48'))}
+(async()=>{
+ const [s,st,inc,fc]=await Promise.all([j('/api/summary'),j('/api/stations'),j('/api/incidents'),j('/api/forecast')]);
+ $('tiles').innerHTML=[[s.city_aqi,'City AQI ('+s.category+')'],[s.pm25_change_vs_prior_24h_pct+'%','PM2.5 vs prior 24h'],
+  [s.station_status.ok+' / '+s.stations,'stations healthy'],[s.quarantined,'quarantined from city AQI']]
+  .map(([a,b])=>`<div class="tile"><b>${esc(a)}</b><span>${esc(b)}</span></div>`).join('');
+ st.forEach(x=>L.circleMarker([x.lat,x.lon],{radius:x.verdict?9:5,weight:1,color:'#333',fillOpacity:.85,
+  fillColor:col[x.verdict]||(x.status==='ok'?'#2e8b57':'#6c7a89')}).addTo(map).bindTooltip('Station '+x.id+(x.aqi_24h?' · AQI '+x.aqi_24h:'')).on('click',()=>show(x.id)));
+ $('inc').innerHTML=inc.filter(r=>r.verdict!=='watch').map(r=>`<div class="inc ${r.verdict}" onclick="show(${r.id})"><b>Station ${r.id} · ${esc(r.verdict.replace('_',' '))}</b>
+  <small>confidence ${r.confidence} (heuristic)</small><ul>${r.evidence.map(e=>'<li>'+esc(e)+'</li>').join('')}</ul><small>${esc(r.action)}</small></div>`).join('')||'None';
+ const m=fc.metrics,sk=h=>m[h].skilled?'skilful':'no skill vs "same as now" - not used for warnings';
+ $('fc').innerHTML=`<small>+6h MAE ${m[6].mae} vs ${m[6].persistence_mae} naive (${sk(6)}). +24h MAE ${m[24].mae} vs ${m[24].persistence_mae} (${sk(24)}).</small>
+  <table><tr><th>Station</th><th>Horizon</th><th>PM2.5</th><th>Band</th></tr>${fc.warnings.slice(0,8).map(w=>`<tr><td>${w.id}${w.quarantined?' ⚠':''}</td><td>+${w.horizon_h}h</td><td>${w.pm25}</td><td>${esc(w.category)}</td></tr>`).join('')||'<tr><td colspan=4>No station moves to a worse band.</td></tr>'}</table>`;
+ const first=inc.find(r=>r.verdict==='sensor_fault')||inc[0];if(first)show(first.id);
+})();
+$('f').onsubmit=async e=>{e.preventDefault();const q=$('q').value.trim();if(!q)return;$('ans').textContent='...';
+ const r=await fetch('/api/ask',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({question:q})});
+ $('ans').textContent=r.ok?(await r.json()).answer:'Request failed ('+r.status+')'};
+</script></body></html>
