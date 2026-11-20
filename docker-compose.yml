@@ -4,7 +4,7 @@ services:
     image: airwatch-ai:latest
     container_name: airwatch-ai
     ports:
-      - "8000:8000"
+      - "8080:8000"
     environment:
       - PORT=8000
       - SEED=7
